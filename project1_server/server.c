@@ -50,9 +50,14 @@ int main(int argc, char *argv[]){
     }
     listen(sockfd,5); // Listen for socket connections. Backlog queue (connections to wait) is 5
 
+    c_req_tmp = (char*)malloc(sizeof(char)*128);
+    c_req     = (char*)malloc(sizeof(char)*128);
+    HTTPstate = (char*)malloc(sizeof(char)*256);
+    extension = (char*)malloc(sizeof(char)*256);
 
     while(1){
         clilen = sizeof(cli_addr);
+printf("waiting.....\n");
         newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
 
         if (newsockfd < 0) error("ERROR on accept");
@@ -62,13 +67,9 @@ int main(int argc, char *argv[]){
         n = read(newsockfd, buffer, 1024); //Read is a block function. It will read at most 1024 bytes
         if (n < 0) error("ERROR reading from socket");
 
-        c_req_tmp = (char*)malloc(sizeof(char)*128);
-        c_req     = (char*)malloc(sizeof(char)*128);
-        HTTPstate = (char*)malloc(sizeof(char)*256);
-        extension = (char*)malloc(sizeof(char)*256);
-        memset(c_req_tmp, 0, 128);//filling with zero
-        memset(c_req, 0, 128);//filling with zero
-        memset(HTTPstate, 0, 256);//filling with zero
+        memset(c_req_tmp, '\0', 128);//filling with zero
+        memset(c_req, '\0', 128);//filling with zero
+        memset(HTTPstate, '\0', 256);//filling with zero
 
         strcpy(c_req_tmp, buffer);//copying header information into 'c_req_tmp'
         c_req = strtok(c_req_tmp, " ");
@@ -130,27 +131,36 @@ int main(int argc, char *argv[]){
         }
         fseek(file, 0, SEEK_END);//putting file pointer at the end
         filesize = ftell(file)+1;//set filesize with the last NULL character
+printf("1\n");
         data = (char*)malloc(sizeof(char)*(filesize));
-        memset(data, 0, filesize);//filling with zero
+printf("2\n");
+        memset(data, '\0', filesize);//filling with zero
         fseek(file, 0, SEEK_SET);//putting file pointer at the beginning
         fread(data, sizeof(char), filesize, file);//put file's data into variable data
         fclose(file);//close the open file
 
         sndsize = 1024;
-
+printf("3\n");
+printf("filesize = %d\n", filesize);
         write(newsockfd, HTTPstate, strlen(HTTPstate));
-        for(i = 0; i <= filesize/1024; i++) {
-            if(i == filesize/1024) sndsize = filesize%1024+1;
+        for(i = 0; i <= filesize-1/1024; i++) {
+printf("\"%d::", i);
+            if(i == filesize-1/1024) sndsize = filesize-1%1024;
+printf("%d(%d)::", i, sndsize);
             if(write(newsockfd, data+(1024*i), sndsize) < 0){//variable i helps where file pointer to start to write every for loop works
                 error("ERROR writing to socket");
             }
+printf("%d\" ", i);
         }
+printf("4\n");
+    	free(data);
+printf("5\n");
         close(newsockfd);//close socket
+printf("6\n");
     }
     free(c_req);
     free(c_req_tmp);
     free(HTTPstate);
-    free(data);
     close(sockfd);
     return 0;
 }

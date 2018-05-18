@@ -7,6 +7,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <time.h>//시간제어 함수
+#include <fcntl.h>//파일 제어함수
+#include <arpa/inet.h>//inet_ntoa함수를 쓰기위한 헤더파일
 
 #define MAX_BUFFER_SIZE 50001
 #define URL_SIZE 2101
@@ -18,11 +21,13 @@ void error(char *msg){
     perror(msg);
     exit(1);
 }
+
 typedef enum _bool{true, false} bool;
 int getPortNum(char* buf);
 char *getHost(char* url);
 char *getUrlPath(char* url);
 bool isRightRequest(char* method, char* url, char* version);
+void writeLog(char* ip, char* url, int size);
 
 int main(int argc, char *argv[]){
 	int c_sockfd=0, c_newsockfd=0;
@@ -31,7 +36,7 @@ int main(int argc, char *argv[]){
 	int n=0;
 	ssize_t data_len=0, recved_data_size = 0;
 	struct sockaddr_in cli_addr, pxy_addr, serv_addr;
-	// struct hostent *server;
+	struct hostent *server;
 	socklen_t clilen;
 
 	char buffer[MAX_BUFFER_SIZE]={0};
@@ -87,7 +92,10 @@ printf("FIRST OF WHILE=============================\n\n");
 		strtok(c_req_tmp, "\r\n");
 		sscanf(c_req_tmp, "%s %s %s", method, url, version);
 	    
-	    if(isRightRequest(method, url, version) == false) continue;
+	    if(isRightRequest(method, url, version) == false){
+	    	printf("NO_RIGHT_REQUEST : %s\n", c_req_tmp);
+	    	continue;
+	    }
 
 	    bzero((char*)host, URL_SIZE);
 	    printf("FIRST====buffer====\n%s\n", buffer);
@@ -105,7 +113,7 @@ printf("FIRST OF WHILE=============================\n\n");
 printf("\"%s\" %lu\n", host, strlen(host));
 	printf("host = %s\n\nhttp_request=====\n%s\n\n", host, http_request);
 printf("check==0\n");
-		struct hostent *server={0};
+		// struct hostent *server={0};
 	    server = gethostbyname(host);
 printf("check==01\n");
 	    if (server == NULL) {
@@ -144,6 +152,7 @@ printf("check==22222\n");
 	    		}
 	    	}while(data_len > 0);
 printf("recved_data_size === %zd\n", recved_data_size);
+			writeLog(inet_ntoa(cli_addr.sin_addr), url, recved_data_size);
 	    }
 	    recved_data_size = 0;
 	    close(c_newsockfd);
@@ -188,8 +197,10 @@ char* getHost(char* secondline){
 }
 
 char* getUrlPath(char* url){
-	strcat(url, "^&");
-	strtok(url+8, "/");
+	char tmparr[URL_SIZE];
+	strcpy(tmparr, url);
+	strcat(tmparr, "^&");
+	strtok(tmparr+8, "/");
 	char* tmp = strtok(NULL, "^&");
 	return tmp==NULL?"": tmp;
 }
@@ -198,4 +209,21 @@ bool isRightRequest(char* method, char* url, char* version){
 	if(!strncmp(method, "GET", 3) && !strncmp(url, "http://", 7) && (!strncmp(version, "HTTP/1.1", 8) || !strncmp(version, "HTTP/1.0", 8)))
 		return true;
 	else return false;
+}
+
+void writeLog(char* ip, char* url, int size){
+	int fd;
+	time_t     rawtime;
+    struct tm *timeinfo;
+	char tmp[50], buffer[500];
+
+	time(&rawtime);
+	timeinfo = localtime(&rawtime);
+	strftime(tmp, 50, "%a %d %b %Y %X %Z:", timeinfo);
+	sprintf(buffer, "%s %s %s %d\n", tmp, ip, url, size);
+
+	if(0<(fd = open("proxy.log", O_WRONLY | O_CREAT | O_APPEND, 0644))){
+		write(fd, buffer, strlen(buffer));
+		close(fd);
+	}else error("ERROR opening PROXY.LOG FILE");
 }

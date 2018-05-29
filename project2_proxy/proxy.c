@@ -10,12 +10,15 @@
 #include <time.h>//시간제어 함수
 #include <fcntl.h>//파일 제어함수
 #include <arpa/inet.h>//inet_ntoa함수를 쓰기위한 헤더파일
+#include "lru.h"
 
 #define MAX_BUFFER_SIZE 50001
 #define URL_SIZE 2101
 #define METHOD_SIZE 11
 #define HTTP_VERSION_SIZE 21
 #define HTTP_REQUEST_SIZE 501
+#define MAX_OBJECT_SIZE 524288
+
 
 void error(char *msg){
     perror(msg);
@@ -23,11 +26,11 @@ void error(char *msg){
 }
 
 typedef enum _bool{true, false} bool;
-int getPortNum(char* buf);
-char *getHost(char* url);
-char *getUrlPath(char* url);
-bool isRightRequest(char* method, char* url, char* version);
-void writeLog(char* ip, char* url, int size);
+int getPortNum(char* buf);//포트번호를 처리하는 함수, 유저가 따로 요청하지않았다면 80을 리턴한다
+char *getHost(char* url);//url을 통하여 host를 처리하는 함수
+char *getUrlPath(char* url);//url을 통하여 경로를 처리하는 함수
+bool isRightRequest(char* method, char* url, char* version);//올바른 http요청인지 확인하는 함수
+void writeLog(char* ip, char* url, int size);//proxy.log를 생성, 추가하는 함수.
 
 int main(int argc, char *argv[]){
 	int c_sockfd=0, c_newsockfd=0;
@@ -40,9 +43,15 @@ int main(int argc, char *argv[]){
 	socklen_t clilen;
 
 	char buffer[MAX_BUFFER_SIZE]={0};
+	char tmp_data[MAX_OBJECT_SIZE]={0};
 	char method[METHOD_SIZE]={0}, url[URL_SIZE]={0}, version[HTTP_VERSION_SIZE]={0}, http_request[HTTP_REQUEST_SIZE]={0}, host[URL_SIZE]={0};
 	char* c_req_tmp = (char*)malloc(sizeof(char)*MAX_BUFFER_SIZE);
-    char* path      = (char*)malloc(sizeof(char)*URL_SIZE);
+    char path[URL_SIZE]={0};
+
+//lru q생성
+    lruQueue* q = init_queue();
+//lru 큐에 담을 node 선언
+    node* requestedNode=NULL;
 
 	if (argc < 2) {
         fprintf(stderr,"ERROR, no port provided\n");
@@ -54,11 +63,8 @@ int main(int argc, char *argv[]){
 
     int opt = 1;
 	setsockopt(c_sockfd, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(int));
-    // s_sockfd = socket(AF_INET, SOCK_STREAM, 0);//서버와의 소켓
-    // if (s_sockfd < 0) error("ERROR opening s_socket");
 
     bzero((char *) &pxy_addr, sizeof(pxy_addr));
-
     pxy_portno = atoi(argv[1]); //atoi converts from String to Integer
     pxy_addr.sin_family = AF_INET;
     pxy_addr.sin_addr.s_addr = INADDR_ANY; //for the server the IP address is always the address that the server is running on
@@ -67,22 +73,19 @@ int main(int argc, char *argv[]){
     if (bind(c_sockfd, (struct sockaddr *) &pxy_addr, sizeof(pxy_addr)) < 0){ //Bind the socket to the server address
         error("ERROR on binding");
     }
-    listen(c_sockfd,10); // Listen for socket connections. Backlog queue (connections to wait) is 5
+    listen(c_sockfd,10);
 	
 	while(1){
-
 		clilen = sizeof(cli_addr);
-printf("FIRST OF WHILE=============================\n\n");
-	    c_newsockfd = accept(c_sockfd, (struct sockaddr *) &cli_addr, &clilen);//사용자의 요청을 기다림
+//사용자의 요청을 기다린다.
+	    c_newsockfd = accept(c_sockfd, (struct sockaddr *) &cli_addr, &clilen);
 	    if (c_newsockfd < 0) error("ERROR on accept");
 
 
 	    bzero(buffer, MAX_BUFFER_SIZE);
-	    n = read(c_newsockfd, buffer, MAX_BUFFER_SIZE); //Read is a block function. It will read at most 1024 bytes
+	    n = read(c_newsockfd, buffer, MAX_BUFFER_SIZE);
 	    if (n < 0) error("ERROR reading from socket");
 
-
-		
 	    bzero((char*)c_req_tmp, MAX_BUFFER_SIZE);
 	    bzero(method, METHOD_SIZE);
 	    bzero(url, URL_SIZE);
@@ -91,69 +94,109 @@ printf("FIRST OF WHILE=============================\n\n");
 		strcpy(c_req_tmp, buffer);
 		strtok(c_req_tmp, "\r\n");
 		sscanf(c_req_tmp, "%s %s %s", method, url, version);
-	    
 	    if(isRightRequest(method, url, version) == false){
-	    	printf("NO_RIGHT_REQUEST : %s\n", c_req_tmp);
+	    	send(c_newsockfd, "400 : BAD REQUEST\nONLY HTTP REQUESTS ALLOWED", 18, 0);
 	    	continue;
 	    }
 
 	    bzero((char*)host, URL_SIZE);
-	    printf("FIRST====buffer====\n%s\n", buffer);
 	    bzero((char*)c_req_tmp, MAX_BUFFER_SIZE);
+	    bzero((char*)path, URL_SIZE);
+
 	    strcpy(c_req_tmp, buffer);
 		strtok(c_req_tmp, "\r\n");
+//host를 함수로 처리하여 host 변수에 담는다		
 		strcpy(host, getHost(strtok(NULL, "\r\n")));
-		path = getUrlPath(url);
-	////////////
+//host 주소를 제외한 경로를 path변수에 담는다.
+		strcpy(path, getUrlPath(url));
 
-	    s_sockfd = socket(AF_INET, SOCK_STREAM, 0);
-	    if (s_sockfd < 0) error("ERROR opening s_socket");
+//LRU 큐에 요청한 데이터가 있는지 확인한다. 있으면 큐에서 가져온 데이터를 전송해준다.
+		
+		requestedNode = search(q, url);
+		if(requestedNode!=NULL){
+			printf("\n\n\n------------------------------------------------\n|         H            I             T         |\n------------------------------------------------");
+			send(c_newsockfd, requestedNode->data, requestedNode->size, 0);
+//log에 작성한다
+			writeLog(inet_ntoa(cli_addr.sin_addr), url, getFirst(q)->size);
+		}else{
+			printf("\n\n\n------------------------------------------------\n|        M         I          S         S      |\n------------------------------------------------");
+//서버와 통신을 위한 소켓을 생성한다.
+		    s_sockfd = socket(AF_INET, SOCK_STREAM, 0);
+		    if (s_sockfd < 0) error("ERROR opening s_socket");
+//서버에게 보낼 request 양식을 만든다.
+			sprintf(http_request, "%s /%s %s\r\nHost: %s\r\nConnection: close\r\n\r\n", method, path, version, host);
+		    server = gethostbyname(host);
+		    if (server == NULL) {
+		        fprintf(stderr,"ERROR, no such host\n");
+		        exit(0);
+		    }
+//유저가 보낸 url을 기반으로 port번호를 가져온다 default는 80이다.
+		    c_portno = getPortNum(buffer);
 
-	sprintf(http_request, "%s /%s %s\r\nHost: %s\r\nConnection: close\r\n\r\n", method, path, version, host);
-printf("\"%s\" %lu\n", host, strlen(host));
-	printf("host = %s\n\nhttp_request=====\n%s\n\n", host, http_request);
-printf("check==0\n");
-		// struct hostent *server={0};
-	    server = gethostbyname(host);
-printf("check==01\n");
-	    if (server == NULL) {
-printf("check==02\n");
-	        fprintf(stderr,"ERROR, no such host\n");
-	        exit(0);
-	    }
-printf("check==03\n");
-	    c_portno = getPortNum(buffer);
-printf("check==04\n");
-	    bzero((char *) &serv_addr, sizeof(serv_addr));
-printf("check==05\n");	    
-	    serv_addr.sin_family = AF_INET; //initialize server's address
-printf("check==06\n");
-	    bcopy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr, server->h_length);
-printf("check==07\n");
-	    serv_addr.sin_port = htons(c_portno);
-printf("check==08\n");	    
+		    bzero((char *) &serv_addr, sizeof(serv_addr));
+		    serv_addr.sin_family = AF_INET; //initialize server's address
+		    bcopy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr, server->h_length);
+		    serv_addr.sin_port = htons(c_portno);
+//서버와 connect를 한다
+		    if (connect(s_sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0) //establish a connection to the server
+		        error("ERROR connecting");
+//서버에게 request를 보낸다.
+		    if((data_len = send(s_sockfd, http_request, strlen(http_request), 0)) < 0){
+		    	error("ERROR writing socket");
+		    }else{//서버에 정상적으로 보냈다면 데이터를 받아서 유저에게 넘겨준다.
+//서버로부터 받아온 전체데이터를 받아놓기 위해 초기화작업을 한다.
+		    	int tmp_idx = 0;
+		    	bzero(tmp_data, MAX_OBJECT_SIZE);
 
-	    if (connect(s_sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0) //establish a connection to the server
-	        error("ERROR connecting");
-printf("check==09\n");
-	    if((data_len = send(s_sockfd, http_request, strlen(http_request), 0)) < 0){
-	    	error("ERROR writing socket");
-printf("check==001\n");
-	    }else{
-printf("check==002\n");
-	    	do{
-printf("check==1111111111\n");
-	    		bzero(buffer, MAX_BUFFER_SIZE);
-	    		data_len = recv(s_sockfd, buffer, MAX_BUFFER_SIZE-1, 0);
-	    		recved_data_size += data_len;
-	    		if(data_len > 0){
-	    			send(c_newsockfd, buffer, data_len, 0);
-printf("check==22222\n");
-	    		}
-	    	}while(data_len > 0);
-printf("recved_data_size === %zd\n", recved_data_size);
-			writeLog(inet_ntoa(cli_addr.sin_addr), url, recved_data_size);
-	    }
+//서버에서 데이터를 받아서 유저에게 넘겨준다
+		    	do{
+		    		bzero(buffer, MAX_BUFFER_SIZE);
+		    		data_len = recv(s_sockfd, buffer, MAX_BUFFER_SIZE-1, 0);
+		    		recved_data_size += data_len;
+
+		    		if(data_len > 0){
+//유저에게 데이터를 보내준다
+		    			send(c_newsockfd, buffer, data_len, 0);
+//새로운 노드를 만들기 위해 유저에게 보낸 데이터를 tmp_data에 담아둔다. 지정한 object 사이즈보다 크면 넣지않는다.
+		    			if(data_len+tmp_idx < MAX_OBJECT_SIZE)
+		    				strcpy(tmp_data+tmp_idx, buffer);
+		    			tmp_idx += data_len;
+		    		}
+		    	}while(data_len > 0);
+
+//지정한 Object 사이즈보다 작은 데이터면 LRU큐에 삽입한다.
+				if(recved_data_size < MAX_OBJECT_SIZE){
+//큐에 남은 공간보다 object사이즈가 클경우 마지막 노드들을 삭제하여 공간을 생성한다.
+					while((MAX_CACHE_SIZE - (q->object_size)) < recved_data_size){
+						free_node(removeLast(q));
+					}
+//새로운 노드를 만든다
+					node* newNode = node_alloc();
+//노드에 데이터를 만들어 입력한다 
+					char* data_tmp = (char*)malloc(sizeof(char) * (recved_data_size + 1));
+					bzero((char*)data_tmp, sizeof(data_tmp));
+					strcpy(data_tmp, tmp_data);
+					newNode->data = data_tmp;
+
+					char* url_tmp = (char*)malloc(sizeof(char) * (strlen(url) + 1)); 
+					bzero((char*)url_tmp, sizeof(url_tmp));
+					strcpy(url_tmp, url);
+		    		newNode->url = url_tmp;
+
+					newNode->size = recved_data_size;
+//큐에 삽입
+			    	addFirst(q, newNode);
+				}
+//log에 작성한다
+				writeLog(inet_ntoa(cli_addr.sin_addr), url, recved_data_size);
+			}
+		}//else문 닫힘
+//큐의 상태를 보여준다
+		print(q);
+
+		
+	    
+//다음 요청에 사용하기 위해 초기화
 	    recved_data_size = 0;
 	    close(c_newsockfd);
     	close(s_sockfd);
@@ -197,7 +240,7 @@ char* getHost(char* secondline){
 }
 
 char* getUrlPath(char* url){
-	char tmparr[URL_SIZE];
+	char tmparr[URL_SIZE]={0};
 	strcpy(tmparr, url);
 	strcat(tmparr, "^&");
 	strtok(tmparr+8, "/");
@@ -208,12 +251,12 @@ char* getUrlPath(char* url){
 bool isRightRequest(char* method, char* url, char* version){
 	if(!strncmp(method, "GET", 3) && !strncmp(url, "http://", 7) && (!strncmp(version, "HTTP/1.1", 8) || !strncmp(version, "HTTP/1.0", 8)))
 		return true;
-	else return false;
+	return false;
 }
 
 void writeLog(char* ip, char* url, int size){
 	int fd;
-	time_t     rawtime;
+	time_t rawtime;
     struct tm *timeinfo;
 	char tmp[50], buffer[500];
 

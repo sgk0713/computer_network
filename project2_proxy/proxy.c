@@ -73,7 +73,7 @@ int main(int argc, char *argv[]){
     if (bind(c_sockfd, (struct sockaddr *) &pxy_addr, sizeof(pxy_addr)) < 0){ //Bind the socket to the server address
         error("ERROR on binding");
     }
-    listen(c_sockfd,10);
+    listen(c_sockfd, 10);
 	
 	while(1){
 		clilen = sizeof(cli_addr);
@@ -81,11 +81,9 @@ int main(int argc, char *argv[]){
 	    c_newsockfd = accept(c_sockfd, (struct sockaddr *) &cli_addr, &clilen);
 	    if (c_newsockfd < 0) error("ERROR on accept");
 
-
 	    bzero(buffer, MAX_BUFFER_SIZE);
 	    n = read(c_newsockfd, buffer, MAX_BUFFER_SIZE);
 	    if (n < 0) error("ERROR reading from socket");
-
 	    bzero((char*)c_req_tmp, MAX_BUFFER_SIZE);
 	    bzero(method, METHOD_SIZE);
 	    bzero(url, URL_SIZE);
@@ -94,113 +92,113 @@ int main(int argc, char *argv[]){
 		strcpy(c_req_tmp, buffer);
 		strtok(c_req_tmp, "\r\n");
 		sscanf(c_req_tmp, "%s %s %s", method, url, version);
-	    if(isRightRequest(method, url, version) == false){
-	    	send(c_newsockfd, "400 : BAD REQUEST\nONLY HTTP REQUESTS ALLOWED", 18, 0);
-	    	continue;
-	    }
+	    
+	    if(isRightRequest(method, url, version) == true){
+		    bzero((char*)host, URL_SIZE);
+		    bzero((char*)c_req_tmp, MAX_BUFFER_SIZE);
+		    bzero((char*)path, URL_SIZE);
 
-	    bzero((char*)host, URL_SIZE);
-	    bzero((char*)c_req_tmp, MAX_BUFFER_SIZE);
-	    bzero((char*)path, URL_SIZE);
-
-	    strcpy(c_req_tmp, buffer);
-		strtok(c_req_tmp, "\r\n");
+		    strcpy(c_req_tmp, buffer);
+			strtok(c_req_tmp, "\r\n");
 //host를 함수로 처리하여 host 변수에 담는다		
-		strcpy(host, getHost(strtok(NULL, "\r\n")));
+			strcpy(host, getHost(strtok(NULL, "\r\n")));
 //host 주소를 제외한 경로를 path변수에 담는다.
-		strcpy(path, getUrlPath(url));
+			strcpy(path, getUrlPath(url));
 
 //LRU 큐에 요청한 데이터가 있는지 확인한다. 있으면 큐에서 가져온 데이터를 전송해준다.
-		
-		requestedNode = search(q, url);
-		if(requestedNode!=NULL){
-			printf("\n\n\n------------------------------------------------\n|         H            I             T         |\n------------------------------------------------");
-			send(c_newsockfd, requestedNode->data, requestedNode->size, 0);
+			requestedNode = search(q, url);
+			if(requestedNode != NULL){
+				printf("\n\n\n------------------------------------------------\n|         H            I             T         |\n------------------------------------------------\n");
+				send(c_newsockfd, requestedNode->data, requestedNode->size, 0);
+printf("requestedNode->size = %d\n", requestedNode->size);
 //log에 작성한다
-			writeLog(inet_ntoa(cli_addr.sin_addr), url, getFirst(q)->size);
-		}else{
-			printf("\n\n\n------------------------------------------------\n|        M         I          S         S      |\n------------------------------------------------");
+				writeLog(inet_ntoa(cli_addr.sin_addr), url, getFirst(q)->size);
+			}else{
+				printf("\n\n\n------------------------------------------------\n|        M         I          S         S      |\n------------------------------------------------\n");
 //서버와 통신을 위한 소켓을 생성한다.
-		    s_sockfd = socket(AF_INET, SOCK_STREAM, 0);
-		    if (s_sockfd < 0) error("ERROR opening s_socket");
+		    	s_sockfd = socket(AF_INET, SOCK_STREAM, 0);
+		    	if (s_sockfd < 0) error("ERROR opening s_socket");
 //서버에게 보낼 request 양식을 만든다.
-			sprintf(http_request, "%s /%s %s\r\nHost: %s\r\nConnection: close\r\n\r\n", method, path, version, host);
-		    server = gethostbyname(host);
-		    if (server == NULL) {
-		        fprintf(stderr,"ERROR, no such host\n");
-		        exit(0);
-		    }
+				sprintf(http_request, "%s /%s %s\r\nHost: %s\r\nConnection: close\r\n\r\n", method, path, version, host);
+		    	server = gethostbyname(host);
+		    	if (server == NULL) {
+		    	    fprintf(stderr,"ERROR, no such host\n");
+		    	    exit(0);
+		    	}
 //유저가 보낸 url을 기반으로 port번호를 가져온다 default는 80이다.
-		    c_portno = getPortNum(buffer);
-
-		    bzero((char *) &serv_addr, sizeof(serv_addr));
-		    serv_addr.sin_family = AF_INET; //initialize server's address
-		    bcopy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr, server->h_length);
-		    serv_addr.sin_port = htons(c_portno);
+		    	c_portno = getPortNum(buffer);
+		    	bzero((char *) &serv_addr, sizeof(serv_addr));
+		    	serv_addr.sin_family = AF_INET; //initialize server's address
+		    	bcopy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr, server->h_length);
+		    	serv_addr.sin_port = htons(c_portno);
 //서버와 connect를 한다
-		    if (connect(s_sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0) //establish a connection to the server
-		        error("ERROR connecting");
+		    	if (connect(s_sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0) //establish a connection to the server
+			        error("ERROR connecting");
 //서버에게 request를 보낸다.
-		    if((data_len = send(s_sockfd, http_request, strlen(http_request), 0)) < 0){
-		    	error("ERROR writing socket");
-		    }else{//서버에 정상적으로 보냈다면 데이터를 받아서 유저에게 넘겨준다.
+			    if((data_len = send(s_sockfd, http_request, strlen(http_request)+1, 0)) < 0){
+			    	error("ERROR writing socket");
+			    }else{//서버에 정상적으로 보냈다면 데이터를 받아서 유저에게 넘겨준다.
 //서버로부터 받아온 전체데이터를 받아놓기 위해 초기화작업을 한다.
-		    	int tmp_idx = 0;
-		    	bzero(tmp_data, MAX_OBJECT_SIZE);
+			    	int tmp_idx = 0;
+			    	bzero(tmp_data, MAX_OBJECT_SIZE);
 
 //서버에서 데이터를 받아서 유저에게 넘겨준다
-		    	do{
-		    		bzero(buffer, MAX_BUFFER_SIZE);
-		    		data_len = recv(s_sockfd, buffer, MAX_BUFFER_SIZE-1, 0);
-		    		recved_data_size += data_len;
-
-		    		if(data_len > 0){
+			    	do{
+			    		bzero(buffer, MAX_BUFFER_SIZE);
+			    		data_len = recv(s_sockfd, buffer, MAX_BUFFER_SIZE-1, 0);
+			    		recved_data_size += data_len;
+printf("buffer = %lu\n", strlen(buffer));
+printf("data_len = %lu\n", data_len);
+			    		if(data_len > 0){
 //유저에게 데이터를 보내준다
-		    			send(c_newsockfd, buffer, data_len, 0);
+		    				send(c_newsockfd, buffer, data_len, 0);
+printf("buffer1 = %lu\n", strlen(buffer));
+printf("data_len1 = %lu\n", data_len);
 //새로운 노드를 만들기 위해 유저에게 보낸 데이터를 tmp_data에 담아둔다. 지정한 object 사이즈보다 크면 넣지않는다.
-		    			if(data_len+tmp_idx < MAX_OBJECT_SIZE)
-		    				strcpy(tmp_data+tmp_idx, buffer);
-		    			tmp_idx += data_len;
-		    		}
-		    	}while(data_len > 0);
+			    			if(data_len+tmp_idx < MAX_OBJECT_SIZE)
+			    				memcpy(tmp_data+tmp_idx, buffer, data_len);
 
+			    			tmp_idx += data_len;
+			    		}
+		    		}while(data_len > 0);//do-while문
 //지정한 Object 사이즈보다 작은 데이터면 LRU큐에 삽입한다.
-				if(recved_data_size < MAX_OBJECT_SIZE){
+					if(recved_data_size < MAX_OBJECT_SIZE){
 //큐에 남은 공간보다 object사이즈가 클경우 마지막 노드들을 삭제하여 공간을 생성한다.
-					while((MAX_CACHE_SIZE - (q->object_size)) < recved_data_size){
-						free_node(removeLast(q));
-					}
+						while((MAX_CACHE_SIZE - (q->object_size)) < recved_data_size){
+							free_node(removeLast(q));
+						}
 //새로운 노드를 만든다
-					node* newNode = node_alloc();
+						node* newNode = node_alloc();
 //노드에 데이터를 만들어 입력한다 
-					char* data_tmp = (char*)malloc(sizeof(char) * (recved_data_size + 1));
-					bzero((char*)data_tmp, sizeof(data_tmp));
-					strcpy(data_tmp, tmp_data);
-					newNode->data = data_tmp;
+						char* data_tmp = (char*)malloc(sizeof(char) * (recved_data_size + 1));
+						bzero((char*)data_tmp, sizeof(data_tmp));
+printf("strlen(tmp_data) = %lu\n", strlen(tmp_data));
+printf("recved_data_size = %lu\n", recved_data_size);
+//NULL까지 복사해야된다*********!!!!
+						memcpy(data_tmp, tmp_data, recved_data_size);
+						newNode->data = data_tmp;
 
-					char* url_tmp = (char*)malloc(sizeof(char) * (strlen(url) + 1)); 
-					bzero((char*)url_tmp, sizeof(url_tmp));
-					strcpy(url_tmp, url);
-		    		newNode->url = url_tmp;
+						char* url_tmp = (char*)malloc(sizeof(char) * (strlen(url) + 1)); 
+						bzero((char*)url_tmp, sizeof(url_tmp));
+						strcpy(url_tmp, url);
+			    		newNode->url = url_tmp;
 
-					newNode->size = recved_data_size;
+						newNode->size = recved_data_size;
 //큐에 삽입
-			    	addFirst(q, newNode);
-				}
+				    	addFirst(q, newNode);
+					}
 //log에 작성한다
-				writeLog(inet_ntoa(cli_addr.sin_addr), url, recved_data_size);
-			}
-		}//else문 닫힘
+					writeLog(inet_ntoa(cli_addr.sin_addr), url, recved_data_size);
+				}
+			}//요청했던 request가 아니라면 else문 닫힘
 //큐의 상태를 보여준다
-		print(q);
-
-		
-	    
+			print(q);
 //다음 요청에 사용하기 위해 초기화
-	    recved_data_size = 0;
-	    close(c_newsockfd);
-    	close(s_sockfd);
-	}
+		    recved_data_size = 0;
+		    close(c_newsockfd);
+	    	close(s_sockfd);
+		}//올바른 http request일 경우 if문 닫힘
+	}//while문 닫힘
 
 	free(c_req_tmp);
 	free(host);

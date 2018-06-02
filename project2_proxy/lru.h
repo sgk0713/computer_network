@@ -161,14 +161,14 @@ void print(lruQueue* q){
 		"|              < Web Cache Status >            |\n",
 		"------------------------------------------------\n\n");
 
-	node* tmp = (q->header->next);
+	node* tmp = (q->trailer->prev);
 	
-	int i = 0;
+	int i = q->node_count;
 
-	while(tmp != (q->trailer)){
+	while(tmp != (q->header)){
+		i--;
 		printf("|[%2d]URL:%s\n|    (%7d bytes)\n\n", i, (tmp->url), (tmp->size));
-		tmp = (tmp->next);
-		i++;
+		tmp = (tmp->prev);	
 	}
 
 	printf("\n------------------------------------------------\n|%20s / %-23s|\n|%20d / %-23d|\n************************************************\n\n", "Current Size", "MAX SIZE", (q->object_size), MAX_CACHE_SIZE);
